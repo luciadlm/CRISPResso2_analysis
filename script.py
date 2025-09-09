@@ -82,9 +82,9 @@ def get_input_run(filename):
                 parts = cmd_line.split()
 
                 for i, part in enumerate(parts):
-                    if part == "--amplicon_seq" and i + 1 < len(parts):
+                    if part in ("--amplicon_seq", "-a") and i + 1 < len(parts):
                         amplicon_seq = parts[i + 1]
-                    elif part == "--coding_seq" and i + 1 < len(parts):
+                    elif part in ("--coding_seq", "-c") and i + 1 < len(parts):
                         coding_seq = parts[i + 1]
 
                 if amplicon_seq or coding_seq:
@@ -132,13 +132,6 @@ def get_sensitivity(num_value, denom_value):
     sensitivity_value = num_value/denom_value
     return sensitivity_value
 
-## OUTPUT FILE ##
-#
 
-# print(f"% WT: {wt_percent:.2f}%") NOT SPACE IN BETWEEN
-
-# Use functions
-# Shinny for Python
 # HDR Batch mode
 # xlsxwriter
-# hola es una prueba
