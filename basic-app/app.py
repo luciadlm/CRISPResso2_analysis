@@ -22,11 +22,15 @@ app_ui = ui.page_fluid(
     ui.input_text_area("mut_seq", "Enter the MUT sequence:", rows=3),
     ui.input_text_area("wt_seq", "Enter the WT* sequence:", rows=3),
 
+    ui.p(
+        "Note: Sensitivity is automatically calculated using the first folder found (alphabetical order) "
+        "as the reference. Changes to this behavior will be implemented soon."
+    ),
+    
     # Output: results text (TSV table as plain text)
-    # ui.output_ui("replica_selector"),  # Para elegir réplica
-
+    
     ui.output_data_frame("results"),
-    #ui.output_plot("plot"),
+    ui.output_plot("plot"),
 )
 
 # Define Server
@@ -84,13 +88,6 @@ def server(input, output, session):
             total_reads
         )
 
-        # Write header
-        header = ['Replicate', 'Treatment', 'WT/Unmodified %', 'Reads (WT/Unmodified)', 'MUT %', 'Reads (MUT)', 
-                  'WT* %', 'Reads (WT*)', 'Frame shift %', 'Reads (Frame shift)', 'In-frame %', 'Reads (In-frame)', 
-                  'Indel %', 'Reads (Modified)', 'MUT/WT* %', 'Total Reads', 'Sensitivity']
-        
-
-
         # Return all the processed information in a dictionary
         return {
             "Treatment": os.path.basename(treatment_path),
@@ -110,56 +107,41 @@ def server(input, output, session):
             "Total Reads": total_reads,
         }
 
-    def get_all_replicas(base_path, wt_seq, mut_seq):
+    def get_all_folders(base_path, wt_seq, mut_seq):
         """Walks through all subdirectories in the base path to find CRISPResso output folders,
         processes each valid folder and returns a DataFrame with all compiled results"""
 
-        variant_name = os.path.basename(base_path.rstrip('/\\'))
-        results_per_replica = {}
-
-        # results = []
+        results = []
         
         denom_value = None
 
         # print(tmpdir_path)
-        for replicate_name in os.listdir(base_path):
-            replicate_path = os.path.join(base_path, replicate_name)
-            if not os.path.isdir(replicate_path):
-                continue
+        for root, dirs, files in os.walk(base_path):
 
-            replicate_results = []
+            expected_files = [
+                "CRISPResso_mapping_statistics.txt",
+                "CRISPResso_quantification_of_editing_frequency.txt",
+                "Frameshift_analysis.txt"
+                # "Alleles_frequency_table_around_sgRNA_AAAAAATGTTGGCCTCTCTT.txt"
+            ]
 
-            for treatment_name in os.listdir(replicate_path):
-                treatment_path = os.path.join(replicate_path, treatment_name)
-                if not os.path.isdir(treatment_path):
-                    continue
+            if all(f in files for f in expected_files):
+                row = process_treatment_folder(root, wt_seq, mut_seq)
+                if row:
+                    row["Replicate"] = os.path.basename(os.path.dirname(root))
+                    #row["Treatment"] = os.path.basename(root)
+                    results.append(row)
 
-                expected_files = [
-                    "CRISPResso_mapping_statistics.txt",
-                    "CRISPResso_quantification_of_editing_frequency.txt",
-                    "Frameshift_analysis.txt"
-                    # "Alleles_frequency_table_around_sgRNA_AAAAAATGTTGGCCTCTCTT.txt"
-                ]
+        if not results:
+            return pd.DataFrame()
 
-                files = os.listdir(treatment_path)
-                if all(f in files for f in expected_files):
-                    row = process_treatment_folder(treatment_path, wt_seq, mut_seq)
-                    if row:
-                        row["Replicate"] = replicate_name
-                        row["Treatment"] = treatment_name
-                        row["Variant"] = variant_name  # Agregamos nombre de variante en cada fila
-                        replicate_results.append(row)
+        df = pd.DataFrame(results)
+        
+        df["Sensitivity"] = df.groupby("Replicate")["MUT/WT* %"].transform(
+            lambda x: round(x / x.iloc[0] * 100, 2)
+        )
 
-            if replicate_results:
-                df_replicate = pd.DataFrame(replicate_results)
-            
-                # Calcular Sensitivity usando el primer valor de MUT/WT* % de esa réplica
-                denom_value = df_replicate["MUT/WT* %"].iloc[0]
-                df_replicate["Sensitivity"] = round(df_replicate["MUT/WT* %"] / denom_value * 100, 2)
-
-                results_per_replica[replicate_name] = df_replicate
-
-        return results_per_replica
+        return df
 
 
     @reactive.Calc
@@ -176,13 +158,17 @@ def server(input, output, session):
             return pd.DataFrame([["Please enter both MUT and WT* sequences."]], columns=["Message"])
 
         # Write header
-       # header = ['Replicate', 'Treatment', 'WT/Unmodified %', 'Reads (WT/Unmodified)', 'MUT %', 'Reads (MUT)', 
-            #      'WT* %', 'Reads (WT*)', 'Frame shift %', 'Reads (Frame shift)', 'In-frame %', 'Reads (In-frame)', 
-             #     'Indel %', 'Reads (Modified)', 'MUT/WT* %', 'Total Reads', 'Sensitivity']
+        header = ['Replicate', 'Treatment', 'WT/Unmodified %', 'Reads (WT/Unmodified)', 'MUT %', 'Reads (MUT)', 
+                  'WT* %', 'Reads (WT*)', 'Frame shift %', 'Reads (Frame shift)', 'In-frame %', 'Reads (In-frame)', 
+                  'Indel %', 'Reads (Modified)', 'MUT/WT* %', 'Total Reads', 'Sensitivity']
 
-        data_dict = get_all_replicas(tmpdir.name, wt_seq, mut_seq)
+        data = get_all_folders(tmpdir.name, wt_seq, mut_seq)
 
-        return data_dict
+        if data.empty:
+            return pd.DataFrame([["No valid results in zip file."]], columns=["Error"])
+        
+        df = pd.DataFrame(data, columns=header)
+        return df 
 
     def sanitize_id(name):
         # Replace anything that is NOT a letter, number, or underscore with underscore
@@ -191,21 +177,30 @@ def server(input, output, session):
     @output()
     @render.data_frame
     def results():
-        tmpdir = extracted_folder()
-        if tmpdir is None:
-            return pd.DataFrame([["Please upload a zip file."]], columns=["Message"])
-
-        mut_seq = input.mut_seq()
-        wt_seq = input.wt_seq()
-        if not mut_seq or not wt_seq:
-            return pd.DataFrame([["Please enter both MUT and WT* sequences."]], columns=["Message"])
-
-        data_dict = get_all_replicas(tmpdir.name, wt_seq, mut_seq)
-        if not data_dict:
-            return pd.DataFrame([["No valid results found"]], columns=["Message"])
-
-        combined_df = pd.concat(data_dict.values(), ignore_index=True)
-        return combined_df
+        df = get_dataframe()
+        return df
+    
+    @output()
+    @render.plot
+    def plot():
+        df = get_dataframe()
         
+        # Check if expected columns exist
+        if "Sensitivity" not in df.columns or "Treatment" not in df.columns:
+            fig, ax = plt.subplots()
+            ax.text(0.5, 0.5, "No data to plot", ha='center', va='center')
+            ax.axis('off')
+            return fig
+
+        sensitivity = df["Sensitivity"]
+        labels = df["Treatment"]
+
+        fig, ax = plt.subplots(figsize=(10,6))
+        ax.bar(labels, sensitivity)
+        ax.set_title("Sensitivity by Treatment")
+        ax.set_ylabel("Sensitivity")
+        ax.set_xlabel("Treatment")
+
+        return fig
 
 app = App(app_ui, server)
