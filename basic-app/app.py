@@ -26,7 +26,7 @@ app_ui = ui.page_fluid(
         "Note: Sensitivity is automatically calculated using the first folder found (alphabetical order) "
         "as the reference. Changes to this behavior will be implemented soon."
     ),
-    
+
     # Output: results text (TSV table as plain text)
     
     ui.output_data_frame("results"),
@@ -113,24 +113,38 @@ def server(input, output, session):
 
         results = []
         
-        denom_value = None
+        def process_path(path):
+            # Primero, buscar carpetas normales con archivos esperados
+            for root, dirs, files in os.walk(path):
+                expected_files = [
+                    "CRISPResso_mapping_statistics.txt",
+                    "CRISPResso_quantification_of_editing_frequency.txt",
+                    "Frameshift_analysis.txt"
+                ]
 
-        # print(tmpdir_path)
-        for root, dirs, files in os.walk(base_path):
+                # Si la carpeta tiene los archivos esperados, procesa
+                if all(f in files for f in expected_files):
+                    row = process_treatment_folder(root, wt_seq, mut_seq)
+                    if row:
+                        rep_name = os.path.basename(os.path.dirname(root))
+                        if rep_name.startswith("tmp"):
+                            rep_name = "Sample"  
+                        row["Replicate"] = rep_name
+                        results.append(row)
 
-            expected_files = [
-                "CRISPResso_mapping_statistics.txt",
-                "CRISPResso_quantification_of_editing_frequency.txt",
-                "Frameshift_analysis.txt"
-                # "Alleles_frequency_table_around_sgRNA_AAAAAATGTTGGCCTCTCTT.txt"
-            ]
+                # Detectar archivos ZIP dentro del folder actual y procesarlos
+                for f in files:
+                    if f.lower().endswith(".zip"):
+                        zip_path = os.path.join(root, f)
+                        # Extraer zip en un directorio temporal
+                        with tempfile.TemporaryDirectory() as tmp_zip_dir:
+                            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                                zip_ref.extractall(tmp_zip_dir)
+                            # Recursivamente procesar la carpeta extraída
+                            process_path(tmp_zip_dir)
 
-            if all(f in files for f in expected_files):
-                row = process_treatment_folder(root, wt_seq, mut_seq)
-                if row:
-                    row["Replicate"] = os.path.basename(os.path.dirname(root))
-                    #row["Treatment"] = os.path.basename(root)
-                    results.append(row)
+        # Iniciar procesamiento en base_path
+        process_path(base_path)
 
         if not results:
             return pd.DataFrame()
